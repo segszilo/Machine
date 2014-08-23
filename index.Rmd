@@ -1,0 +1,124 @@
+Practical Machine Learning assessment
+========================================================
+
+```{r cache=TRUE}
+library(caret)
+training <- read.csv("pml-training.csv",na.strings=c("NA",""))
+testing <- read.csv("pml-testing.csv",na.strings=c("NA",""))
+```
+
+First, the variables that only have NA values are removed. Also removed are the columns 'X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'new_window' and 'num_window'. These variables are not related to the activity performed, being the row index, the name of the participant and variables related to the time the activity was performed. There is an assumption here that time is not relevant to how the activity is performed.
+
+```{r cache=TRUE}
+countingNAs <- apply(training, 2, function(x) { sum( is.na(x) ) })
+training2 <- training[,which(countingNAs == 0)]
+training2 <- training2[,8:60]
+
+testing2 <- testing[,which(countingNAs == 0)]
+testing2 <- testing2[,8:60]
+```
+
+The training data is then divided into folds to allow cross-validation.
+
+```{r cache=TRUE}
+nfolds <- 2
+set.seed(1337)
+trainingfolds <- createFolds(training2$classe,nfolds,list=TRUE,returnTrain=TRUE)
+set.seed(1337)
+testingfolds <- createFolds(training2$classe,nfolds,list=TRUE,returnTrain=FALSE)
+```
+
+To construct and test the model the body of the analysis is completed for each fold in order to get some level of cross-validation. Pre-processing is performed using principle components analysis with a threshold of 0.9, which reduces the number of variables to 20. A random forests model is then trained against the data resulting from the PCA, using trainControl 'cross validation' to cut down on processing time. I suspect this also folds within the folds.
+
+The same preprocessing is performed on the testing data for that fold, before output is predicted.
+
+The accuracy for the training (in-sample) and test sets (out-of-sample) for the fold are recorded. 
+
+```{r cache=TRUE}
+insampleaccuracy = c()
+outofsampleaccuracy = c()
+for (i in 1:nfolds) {
+    #set training/test
+    foldtraining <- training2[trainingfolds[[i]],]
+    foldtesting <- training2[testingfolds[[i]],]
+    
+    #PCA pre-processing
+    set.seed(1338)
+    preProcess <- preProcess(foldtraining[,-53], method = 'pca', thresh = 0.9)
+    foldtrainingPCA <- predict(preProcess, foldtraining[,-53])
+    
+    foldtrainingPCA2 = foldtrainingPCA
+    foldtrainingPCA2$classe <- foldtraining$classe
+    
+    #build the model
+    modFit <- train(classe ~ .,data = foldtrainingPCA2,method='rf',trControl = trainControl(method = "cv", number = 2))
+    
+    #'predict'
+    trainprediction <- predict(modFit,newdata=foldtrainingPCA)
+    
+    #in sample accuracy
+    tout <- table(trainprediction == foldtraining$classe)
+    if (is.na(tout['FALSE'])) {
+        acc <- 1
+    }
+    else {
+        acc <- tout['TRUE'] / (tout['TRUE'] + tout['FALSE'])
+    }
+    insampleaccuracy <- append(insampleaccuracy,acc)
+    
+    #test on the fold test set
+    set.seed(1338)
+    foldtestingPCA <- predict(preProcess, foldtesting[,-53])
+    
+    #predict
+    testprediction <- predict(modFit, newdata=foldtestingPCA)
+    
+    #out of sample accuracy
+    tout <- table(testprediction == foldtesting$classe)
+    if (is.na(tout['FALSE'])) {
+        acc <- 1
+    }
+    else {
+        acc <- tout['TRUE'] / (tout['TRUE'] + tout['FALSE'])
+    }
+    outofsampleaccuracy <- append(outofsampleaccuracy,acc)
+}
+```
+
+The out of sample error is then estimated by taking 1 minus the mean of all the out of sample errors for the folds. This gives us a mean in sample accuracy of `r mean(insampleaccuracy)` (this is expected to be 1, being the accuracy from the training data of each fold) and an out of sample error rate of `r (1-mean(outofsampleaccuracy))`. We would therefore expect `r floor(mean(outofsampleaccuracy)*20)` out of 20 answers to be correct when applying this to the test set.
+
+Finally, the same model is run against the entire training set, and then applied to the test set.
+
+```{r cache=TRUE}
+    #train against the entire training set
+    set.seed(1338)
+    preProc <- preProcess(training2[,-53], method = 'pca', thresh = 0.9)
+    trainingPCA <- predict(preProc, training2[,-53])
+    
+    trainingPCA2 = trainingPCA
+    trainingPCA2$classe <- training2$classe
+
+    #build the model
+    modFit <- train(classe ~ .,data = trainingPCA2,method='rf',trControl = trainControl(method = "cv", number = 2))
+
+    #preprocess
+    set.seed(1338)
+    testingPCA <- predict(preProc, testing2[,-53])
+
+    prediction <- predict(modFit,newdata=testingPCA)
+
+```
+
+The final results are `r prediction`
+
+```{r echo=FALSE, cache=TRUE}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(prediction)
+```
